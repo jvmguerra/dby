@@ -1,9 +1,9 @@
 import re
 
 from collections import namedtuple # nt
-ntAttr = namedtuple("ntAttr", "attr type size pos")
-ntTable = namedtuple("Attribute", "type size pos")
-ntField = namedtuple("Field", "type size")
+ntAttr = namedtuple("ntAttr", "attr type max_size pos")
+ntTable = namedtuple("Attribute", "type max_size pos")
+ntField = namedtuple("Field", "type max_size")
 
 text = 'meuBD	 (Aluno)\n\t   Aluno      (name: varchar(80), age: int, birth: varchar(12), id: 	varchar  (' \
        '14))\n\tAluno(Roberto Rodrigues, 21, 05/04/1994, 54a5s4df)\n'
