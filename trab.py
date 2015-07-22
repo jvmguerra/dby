@@ -10,19 +10,34 @@ Rid = namedtuple('Register_ID', 'page, slot')
 ntField = namedtuple("Field", "type max_size")
 
 import struct
+
 import mmap
+# não tem como usar mmap por dois motivos:
+#
+# 1) nos unix, inclusive mac, quando vc dá um offset
+# para o mmap maior que o tamanho atual do arquivo,
+# gera-se um erro; o mmap não é capaz de aumentar por
+# conta própria o tamanho do arquivo.
+#
+# 2) no windows, o offset do mmap só pode ser usado
+# por múltiplos de 65536 (mmap.ALLOCATIONGRANULARITY),
+# o que deixa as páginas de tamanho extenso e piora o
+# uso geral da aplicação
+
 import io
+import os
 
 dCatalog = dict()
+
 
 # dCatalog["Scheme1"]["Table1"]["Attribute1"] = "int"
 # dCatalog["Scheme1"]["Table1"]["Attribute2"] = "varchar(64)"
 
-PAGE_SIZE = 8192
+PAGE_SIZE = 256
 QUATRO_GB = 4294967296
 
 
-def my_open(file, offset=0, size=PAGE_SIZE) -> mmap.mmap:
+def my_open(file, offset:int=0, size:int=PAGE_SIZE) -> tuple:
 	if isinstance(file, mmap.mmap):
 	# received an actual mmap object that will be returned
 		if not file.closed:
@@ -31,25 +46,46 @@ def my_open(file, offset=0, size=PAGE_SIZE) -> mmap.mmap:
 	elif isinstance(file, str):
 	# path to the file
 		file = open(file, mode='r+b', buffering=size)
+		file.seek(offset)
+		if not file.read(1):
+		# file have already ended
+			file.seek(size-1, io.SEEK_CUR)
+			file.write(b'\x00')
+			file.seek(-1*size, io.SEEK_CUR)
+		else:
+			file.seek(-1, io.SEEK_CUR)
 	elif isinstance(file, io.FileIO):
 	# file object that was already opened
 		if file.closed:
 			file = open(file.name, mode='r+b', buffering=size)
 		else:
 			file.flush()
+			file.seek(offset)
+			file.seek(size)
+			file.seek(-1*size, io.SEEK_CUR)
 	else: # invalid input
 		return None
+	x = bytearray(file.read(size))
+	#print("OPEN", x)
+	return file, x
 
-	return mmap.mmap(file.fileno(), size, offset=offset)
+def my_close(file:io.FileIO, byar:bytearray):
+	file.seek(-1*len(byar), io.SEEK_CUR)
+	file.write(byar)
+	file.close()
 
 
 def create_table(table:str, dAttributes:dict, nt_fields:list):
 	dCatalog[table] = Table(table, dAttributes, nt_fields)
-	open("tables\\"+table, mode='wb', buffering=0)
+	open("tables" + os.sep + table, mode='wb', buffering=PAGE_SIZE)
+	DirectoryPage(dCatalog[table]).save()
 	print(dCatalog[table].file)
 
 def insert(table:str, values:list):
 	dCatalog[table].insert(values)
+	print(DirectoryPage.load(dCatalog[table]).__dict__)
+	#print(RegisterPage.load(dCatalog[table], PAGE_SIZE).__dict__)
+
 
 
 class Catalog(object):
@@ -70,14 +106,11 @@ class Table(object):
 	"""docstring for Table"""
 	def __init__(self, name:str, dAttributes:dict, nt_fields:list):
 		self.name = name
-		self.archive = "tables\\" + str(name)
-
+		self.archive = "tables" + os.sep + str(name)
 		self.dAttributes = dAttributes # dicionário de características importantes para cada atributo
 		#{ attr_name: nt(pos, type, max_size) , ...}
-
 		self.nt_fields = nt_fields # vetor formatado de acordo com os atributos
 		# [ ntField(type, max_size),  ... ]
-
 		self.file = self.archive
 
 		#self.regFmt = regFmt # string formatted for the struct module
@@ -87,19 +120,17 @@ class Table(object):
 	def insert(self, values:list):
 	# estimates row's size, and provides a formatted string for the struct module
 		structFmt = "="
-		size = 0
 		fields_actual_size=[]
 		for i, v in enumerate(values):
 			if self.nt_fields[i].type is "i":
 				fields_actual_size.append(0)
-				size += 4
 				structFmt += "i"
 			else:
 				max = self.nt_fields[i].max_size
 				n = ( len(v) if len(v) < max  else max )
-				size += n
 				fields_actual_size.append(n)
-				structFmt += "H" + str(n) + 'c'
+				structFmt += "H" + str(n) + 's'
+		size = struct.calcsize(structFmt)
 		# makes a Register with above variables
 		reg = Register(self, size=size, fields=values, structFmt=structFmt, fields_actual_size=fields_actual_size)
 		# loads the first DirectoryPage of this Table
@@ -115,18 +146,21 @@ class DirectoryPage(object):
 	entrySize = struct.calcsize(entryFmt)
 
 	def __init__(self, table:Table, baseAddr:int=0, numOfEntries:int=0, nextDir:int=0, entries:list=None):
+		# persistent stored variables
 		self.baseAddr = baseAddr
 		self.numOfEntries = numOfEntries
 		self.nextDir = nextDir
-		if not entries:
-			self.entries = []
+		self.entries = (entries if entries  else [])
 
+		# -------------------------------------
+		# RAM variables
 		self.table = table
 
+		
 	@staticmethod
 	def load(table:Table, base:int=0) -> __init__:
 		cls = DirectoryPage
-		mm = my_open(table.file, base)
+		file, mm = my_open(table.file, offset=base)
 
 		base, n, next = struct.unpack_from(cls.dirFmt, mm, PAGE_SIZE-cls.dirSize)
 
@@ -135,12 +169,14 @@ class DirectoryPage(object):
 		for _ in range(n):
 			entries.append(struct.unpack_from(cls.entryFmt, mm, offset)[0])
 			offset += cls.entrySize
-
+		file.close()
 		return cls(table, base, n, next, entries)
 
 	def save(self):
 		cls = DirectoryPage
-		mm = my_open(self.table.file, self.baseAddr)
+		file, mm = my_open(self.table.file, self.baseAddr)
+
+		print(len(mm))
 
 		struct.pack_into(cls.dirFmt, mm, PAGE_SIZE-cls.dirSize, self.baseAddr, self.numOfEntries, self.nextDir)
 
@@ -148,6 +184,8 @@ class DirectoryPage(object):
 		for i in range(self.numOfEntries):
 			struct.pack_into(cls.entryFmt, mm, offset, self.entries[i])
 			offset += cls.entrySize
+		my_close(file, mm)
+
 
 	def insert(self, Reg:Register) -> int:
 		cls = DirectoryPage
@@ -158,7 +196,7 @@ class DirectoryPage(object):
 	# tries to find a page with empty space
 		for i, e in enumerate(self.entries):
 			if e >= Reg.size:
-				pageNumber = self.baseAddr * i
+				pageNumber = self.baseAddr + PAGE_SIZE * (i+1)
 				page = RegisterPage.load(self.table, baseAddr=pageNumber)
 				if page.insert(Reg):
 					self.entries[i] -= Reg.size
@@ -166,7 +204,7 @@ class DirectoryPage(object):
 					return page
 				#return self.baseAddr * i
 		if not self.is_full():
-			# DirectoryPage has room for another page entry
+		# DirectoryPage has room for another page entry
 			return self.new_entry(Reg)
 	# no page with empty space in this full filled directory
 		if not self.nextDir:
@@ -195,7 +233,8 @@ class DirectoryPage(object):
 		"""
 		self.entries.append(PAGE_SIZE - Reg.size)
 		self.numOfEntries += 1
-		base = len(self.entries) * self.baseAddr
+		base = self.baseAddr + len(self.entries) * PAGE_SIZE
+		print("BASE = ", base)
 		regPage = RegisterPage(self.table, base)
 		regPage.insert(Reg)
 		self.save()
@@ -211,19 +250,23 @@ class RegisterPage(object):
 
 	emptySize = metaSize + slotSize
 
-	def __init__(self, table, baseAddr:int, numOfSlots:int=0, slots:list=None, startOfFreeSpace:int=0, registers:list=None):
+	def __init__(self, table:Table, baseAddr:int, numOfSlots:int=0, slots:list=None, startOfFreeSpace:int=0, registers:list=None):
+		# persistent stored variables
 		self.startOfFreeSpace = startOfFreeSpace
 		self.numOfSlots = numOfSlots
-		self.slots = (slots if slots  else [])
+		self.slots = (slots  if slots  else [])
+		self.registers = (registers if registers  else [])
+		# -------------------------------------
+		# RAM variables
 		self.table = table
 		self.baseAddr = baseAddr
-		self.registers = (registers if registers  else [])
-
+		
+		
 
 	@staticmethod
 	def load(table:Table, baseAddr:int) -> __init__:
 		cls = RegisterPage
-		mm = my_open(table.file, baseAddr)
+		file, mm = my_open(table.file, baseAddr)
 	# loads meta information
 		offset = PAGE_SIZE - cls.metaSize
 		free, numSlots = struct.unpack_from(cls.metaFmt, mm, offset)
@@ -231,8 +274,8 @@ class RegisterPage(object):
 		slots = []
 		for _ in range(numSlots):
 			offset -= cls.slotSize
-			a, b = struct.unpack_from(cls.slotFmt, mm, offset)
-			slots.append(RegSlot(a, b))
+			start, size = struct.unpack_from(cls.slotFmt, mm, offset)
+			slots.append(RegSlot(start, size))
 	# for each slot in the page, creates a register
 		registers = []
 		for i_slot, slot in enumerate(slots):
@@ -241,6 +284,7 @@ class RegisterPage(object):
 				registers.append(None)
 				continue
 			rid = Rid(baseAddr, i_slot)
+			print(slot)
 			reg = Register.load(table, rid, mm[slot.regStart:slot.regSize])
 			registers.append(reg)
 		# creates a RegisterPage and returns that object
@@ -252,8 +296,9 @@ class RegisterPage(object):
 	# aparentemente não precisa pq nas principais operações já tem um baseAddr
 	def save(self):
 		cls = RegisterPage
-		mm = my_open(self.table.file, self.baseAddr)
+		file, mm = my_open(self.table.file, offset=self.baseAddr)
 
+		print(mm)
 		offset = PAGE_SIZE - cls.metaSize
 		struct.pack_into(cls.metaFmt, mm, offset, self.startOfFreeSpace, self.numOfSlots)
 
@@ -267,6 +312,7 @@ class RegisterPage(object):
 				continue
 			reg = self.registers[i]
 			mm[slot.regStart:slot.regSize] = reg.save()
+		my_close(file, mm)
 	#END save()
 
 
@@ -307,13 +353,15 @@ class RegisterPage(object):
 			return True
 
 	def new_slot(self, Reg:Register):
-		# stores in which page and slot the Register can be found
-		Reg.rid = Rid(self.baseAddr, self.numOfSlots-1)
 		newSlot = RegSlot(self.startOfFreeSpace, Reg.size)
+		print(newSlot)
 		self.slots.append(newSlot)
 		self.registers.append(Reg)
 		self.numOfSlots += 1
 		self.startOfFreeSpace += Reg.size
+		# stores in which page and slot the Register can be found
+		Reg.rid = Rid(self.baseAddr, self.numOfSlots-1)
+
 
 
 
@@ -321,16 +369,19 @@ class Register(object):
 	"""docstring for Register"""
 
 	def __init__(self, table:Table, size:int=0, fields:list=None, fields_actual_size:list=None, structFmt:str="",  rid:Rid=Rid(0,0)):
+		# persistent stored variables
+		self.fields = (fields if fields  else [])
+		# -------------------------------------
+		# RAM variables
 		self.rid = rid
 		self.size = size
-		self.fields = (fields if fields  else [])
 		self.fields_actual_size = (fields_actual_size if fields_actual_size  else [])
 		self.structFmt = structFmt
 		self.table = table
 		#self.space =
 
 	@staticmethod
-	def load(table:Table, rid:Rid, mm:mmap.mmap) -> __init__:
+	def load(table:Table, rid:Rid, mm:bytearray) -> __init__:
 	# for each field in the Register, updates the following variables
 		finalFmt = "=" # used with struct module
 		finalSize = 0
@@ -338,12 +389,12 @@ class Register(object):
 		fields_actual_size = []
 		offset = 0
 		for field in table.nt_fields:
-			if field.type == 'c': # string type
+			if field.type == 's': # string type
 			# needs to load fields size before loading the actual fields value
-				size = struct.unpack_from('H', mm, offset)
+				size = struct.unpack_from('H', mm, offset)[0]
 				fields_actual_size.append(size)
-				offset += size
-				fmt = str(size) + 'c'
+				offset += 2
+				fmt = str(size) + 's'
 				finalFmt += 'H'
 			else: # integer type
 				fmt = 'i'
@@ -351,10 +402,12 @@ class Register(object):
 				fields_actual_size.append(0)
 			finalFmt += fmt
 			finalSize += size
-			fields.append(struct.unpack_from(fmt, mm, offset))
-			offset += field.size
+			print(fmt, offset)
+			fields.append(struct.unpack_from(fmt, mm, offset)[0])
+			offset += size
 		# creates a Register and returns it
-		return Register(table, size=finalSize, fields=fields, fields_actual_size=fields_actual_size, structFmt=finalFmt, rid=rid)
+		print(finalFmt, finalSize, struct.calcsize(finalFmt))
+		return Register(table, size=struct.calcsize(finalFmt), fields=fields, fields_actual_size=fields_actual_size, structFmt=finalFmt, rid=rid)
 
 #todo ver como transformar uma string para bytes, pq o modulo struct só aceita bytes
 	def save(self) -> bytes:
@@ -362,10 +415,16 @@ class Register(object):
 		print(self.rid)
 		values = []
 		for f in self.fields:
-			try: int(f)
-			except: values.append(len(f))
+			try:
+				f = int(f)
+			except:
+				values.append(len(f))
+				try: f = f.encode()
+				except: pass
 			values.append(f)
 		print(values)
-		print(self.structFmt)
-		return struct.pack(self.structFmt, *values)
+		print(self.structFmt, struct.calcsize(self.structFmt))
+		x = struct.pack(self.structFmt, *values)
+		print( x, len(x))
+		return x
 
