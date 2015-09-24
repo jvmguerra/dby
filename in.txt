@@ -1,0 +1,46 @@
+Scheme: meuBD
+Tabel: Aluno
+	name: varchar(80), age: int, birth: varchar(12), id: varchar(14)
+	Roberto Rodrigues, 21, 05/04/1994, 54a5s4df
+	
+
+"Scheme: meuBD\nTabel: Aluno\n\tname: varchar(80), age: int, birth: varchar(12), id: varchar(14)\n\tRoberto Rodrigues, 21, 05/04/1994, 54a5s4df\n"
+
+
+"meuBD(Aluno,)\n\tAluno(name: varchar(80), age: int, birth: varchar(12), id: varchar(14))\n\tRoberto Rodrigues, 21, 05/04/1994, 54a5s4df\n"
+
+
+"meuBD	 (Aluno,)\n\t   Aluno      (name: varchar(80), age: int, birth: varchar(12), id: 	varchar  (14))\n\tRoberto Rodrigues, 21, 05/04/1994, 54a5s4df\n"
+
+space+word+space+"("+space+word+"[,:]+"+space+word
+
+meuBD(Aluno)
+Aluno(name: varchar(80), age: int, birth: varchar(12), id: varchar(14))
+Roberto Rodrigues, 21, 05/04/1994, 54a5s4df
+
+
+r"\w+\s* \( \s*\w+\s* ([,:])+ (\s*\w+\s* , \1)* \)"
+
+"( ,\s* ( \)|\w* ) )|: \s*\w+\s* ,)"
+
+scheme:
+	r"\w+\s* \( \s*\w+\s* () 
+
+
+'meuBD(Aluno)Aluno(name:varchar(80),age:int,birth:varchar(12),id:varchar(14))'
+
+(?P<relation> \w+ \( 
+	(?P<attr> 
+		(?P<nome> \w+) 
+		(?P<type>: [a-zA-Z0-9()-_]+ )?
+	) 
+	(, (?P=attr) )* 
+\) ) 
+
+
+
+\w+ \( \w+ (: [0-9a-zA-Z)(_]+ )?  (, \w+ (: [0-9a-zA-Z)(_]+)? )*  \)
+
+
+
+
