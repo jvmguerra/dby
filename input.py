@@ -6,8 +6,10 @@ ntTable = namedtuple("Attribute", "type max_size pos")
 ntField = namedtuple("Field", "type max_size")
 from trab import *
 
-text = '\n\t   Aluno      (name: varchar(80), age: int, birth: varchar(12), id: 	varchar  (' \
-       '14))\n\tAluno(Roberto Rodrigues, 21, 05/04/1994, 54a5s4df)\nAluno(Alvaro Rodrigues, 26, 06/06/06, c87vc87vc)'
+text = '\n\t   Aluno(name: varchar(80), age: int, birth: varchar(12), id: 	varchar  (' \
+       '14))\n\tAluno(Roberto Rodrigues, 21, 05/04/1994, 54a5s4df)Aluno(Alvaro Rodrigues, 26, 06/06/06, c87vc87vc)\n'
+
+#Aluno(Alvaro Rodrigues, 26, 06/06/06, c87vc87vc)'
 
 text = re.sub("[ \t\n]", "", text)
 
